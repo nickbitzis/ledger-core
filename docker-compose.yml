@@ -1,0 +1,38 @@
+# The API plus a one-shot job that loads six days of demo data first.
+# Both share one volume holding the SQLite database.
+services:
+  seed:
+    build: .
+    image: ledgercore:local
+    command: ["demo", "--fresh"]
+    volumes:
+      - ledger-data:/data
+    restart: "no"
+
+  api:
+    image: ledgercore:local
+    command: ["api", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ledger-data:/data
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  recon:
+    image: ledgercore:local
+    command: ["recon", "--day", "2026-11-04", "--out", "/data/recon-2026-11-04.md"]
+    volumes:
+      - ledger-data:/data
+    profiles: ["jobs"]
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  ledger-data:

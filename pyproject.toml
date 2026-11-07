@@ -1,0 +1,40 @@
+[project]
+name = "ledgercore"
+version = "1.0.0"
+description = "Double-entry ledger for a two-sided ticketing marketplace: escrow, payouts, refunds, chargebacks, holds, FX, reconciliation, and invariant checks."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Nick Bitzis" }]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.scripts]
+ledgercore = "ledgercore.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "hypothesis>=6.100", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ledgercore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["stress: concurrency stress test"]
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:.*httpx.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]

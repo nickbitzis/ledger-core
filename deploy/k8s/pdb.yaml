@@ -1,0 +1,10 @@
+# Voluntary disruptions (node drains, upgrades) take down at most one API pod at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ledgercore-api
+  labels: {app.kubernetes.io/part-of: ledgercore}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: ledgercore-api}

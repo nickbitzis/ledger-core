@@ -1,0 +1,41 @@
+# Nightly reconciliation of yesterday's ledger against the processor settlement file.
+# Illustrative: in production the job would download the file from the processor's SFTP
+# drop and post the report to the finance operations queue.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ledgercore-recon
+  labels: {app.kubernetes.io/part-of: ledgercore}
+spec:
+  schedule: "15 2 * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels: {app.kubernetes.io/name: ledgercore-recon}
+        spec:
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001}
+          containers:
+            - name: recon
+              image: ghcr.io/example/ledgercore:1.0.0
+              args: ["recon", "--day", "yesterday", "--settlement",
+                     "/data/settlements/latest.csv", "--json",
+                     "--out", "/data/reports/recon-latest.json"]
+              envFrom:
+                - configMapRef: {name: ledgercore-config}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: 1, memory: 512Mi}
+              volumeMounts:
+                - {name: data, mountPath: /data}
+          volumes:
+            - name: data
+              persistentVolumeClaim: {claimName: ledgercore-data}

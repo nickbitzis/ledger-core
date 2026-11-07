@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Lint
+        run: uvx ruff check .
+      - name: Test (includes property tests and a small stress run)
+        env:
+          LEDGERCORE_STRESS_THREADS: "6"
+          LEDGERCORE_STRESS_OPS: "30"
+        run: uv run --python 3.12 --group dev pytest -q
+      - name: Demo data, invariants, reconciliation evaluation
+        run: |
+          uv run --python 3.12 ledgercore demo --fresh
+          uv run --python 3.12 ledgercore invariants > /dev/null
+          uv run --python 3.12 ledgercore recon-eval
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ledgercore:ci
+      - name: Smoke test the image
+        run: |
+          docker run --rm -v ledger:/data ledgercore:ci demo --fresh
+          docker run -d --name api -v ledger:/data -p 8000:8000 ledgercore:ci
+          for i in $(seq 1 30); do curl -sf localhost:8000/healthz && break; sleep 1; done
+          curl -sf localhost:8000/v1/organizers/northbeam/balances
+          curl -sf localhost:8000/metrics | grep ledgercore_invariant_ok
+          docker rm -f api
+      - name: Validate compose file
+        run: docker compose config -q

@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ledger-core</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+  --escrow: #2f6fb3; --available: #2e8b57; --pending: #c98a12; --receivable: #c0392b;
+  --debit: #2f6fb3; --credit: #8e44ad;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9a9993; --line: #34332f;
+    --escrow: #6ea8e6; --available: #5cc48a; --pending: #e6b04a; --receivable: #ec7a6d;
+    --debit: #6ea8e6; --credit: #c08ae0;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+header h1 { font-size: 20px; margin: 0; }
+header p { margin: 0; color: var(--muted); }
+main { padding: 8px 24px 40px; display: grid; gap: 16px; max-width: 1200px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+.panel h2 { font-size: 15px; margin: 0 0 12px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.tile .k { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.tile .v { font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.neg { color: var(--receivable); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; }
+.scroll { max-height: 360px; overflow: auto; }
+svg text { fill: var(--muted); font-size: 11px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 6px; }
+.taccounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.t { border: 1px solid var(--line); border-radius: 6px; }
+.t .name { padding: 6px 8px; border-bottom: 2px solid var(--ink); font-size: 12px; word-break: break-all; }
+.t .cols { display: grid; grid-template-columns: 1fr 1fr; }
+.t .cols div { padding: 6px 8px; min-height: 30px; font-variant-numeric: tabular-nums; }
+.t .cols div:first-child { border-right: 2px solid var(--ink); color: var(--debit); }
+.t .cols div:last-child { color: var(--credit); text-align: right; }
+.t .hdr div { color: var(--muted) !important; font-size: 11px; padding-bottom: 0; min-height: 0; }
+.meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.ok { color: var(--available); } .bad { color: var(--receivable); }
+@media (max-width: 640px) { header, main { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ledger-core</h1>
+  <p>Double-entry ledger for a ticketing marketplace. Synthetic data.</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="row">
+      <label for="org">Organizer</label>
+      <select id="org"></select>
+      <span id="inv" class="meta"></span>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Balances now</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+  <section class="panel">
+    <h2>Balances over time</h2>
+    <div id="chart"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+  <section class="panel">
+    <h2 id="thead">Last journal entry</h2>
+    <div class="meta" id="tmeta"></div>
+    <div class="taccounts" id="taccounts"></div>
+  </section>
+  <section class="panel">
+    <h2>Statement (newest first)</h2>
+    <div class="scroll"><table id="stmt"></table></div>
+  </section>
+</main>
+<script type="module">
+const SERIES = [
+  ["escrow", "Escrow", "--escrow"],
+  ["available", "Available", "--available"],
+  ["pending_payouts", "Pending payouts", "--pending"],
+  ["receivable", "Owed to platform", "--receivable"],
+];
+const EXP = { JPY: 0 };
+
+function money(minor, ccy) {
+  const exp = EXP[ccy] ?? 2;
+  const neg = minor < 0;
+  const a = Math.abs(minor);
+  const major = Math.trunc(a / 10 ** exp).toLocaleString("en-US");
+  const frac = exp ? "." + String(a % 10 ** exp).padStart(exp, "0") : "";
+  return `${neg ? "-" : ""}${major}${frac} ${ccy}`;
+}
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
+function tiles(b) {
+  const items = [
+    ["Escrow (event not over)", b.escrow, "--escrow"],
+    ["Available to withdraw", b.available, "--available"],
+    ["Pending payouts", b.pending_payouts, "--pending"],
+    ["Owed to platform", b.receivable, "--receivable"],
+    ["Net position", b.net_position, null],
+  ];
+  document.getElementById("tiles").innerHTML = items.map(([k, v, c]) => `
+    <div class="tile"><div class="k">${c ? `<span class="dot" style="background:var(${c})"></span>` : ""}${k}</div>
+    <div class="v ${v < 0 ? "neg" : ""}">${money(v, b.currency)}</div></div>`).join("");
+}
+
+function chart(points, ccy) {
+  const el = document.getElementById("chart");
+  if (!points.length) { el.textContent = "No activity yet."; return; }
+  const W = Math.max(el.clientWidth, 320), H = 240, L = 70, R = 10, T = 10, B = 26;
+  const t = points.map((p) => Date.parse(p.as_of));
+  const t0 = Math.min(...t), t1 = Math.max(...t) || t0 + 1;
+  const vals = points.flatMap((p) => SERIES.map(([k]) => p[k]));
+  const vmax = Math.max(1, ...vals);
+  const x = (v) => L + ((v - t0) / Math.max(1, t1 - t0)) * (W - L - R);
+  const y = (v) => T + (1 - v / vmax) * (H - T - B);
+  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="Balance history">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = Math.round((vmax * i) / 4);
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="${css("--line")}"/>`;
+    svg += `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${money(v, ccy).replace(/\.\d+ /, " ")}</text>`;
+  }
+  const days = new Set(points.map((p) => p.as_of.slice(0, 10)));
+  for (const d of days) {
+    const xv = x(Date.parse(d + "T00:00:00Z"));
+    if (xv >= L) svg += `<text x="${xv}" y="${H - 8}" text-anchor="middle">${d.slice(5)}</text>`;
+  }
+  for (const [k, , c] of SERIES) {
+    let d = "";
+    points.forEach((p, i) => {
+      const px = x(t[i]), py = y(p[k]);
+      d += i ? ` H${px.toFixed(1)} V${py.toFixed(1)}` : `M${px.toFixed(1)} ${py.toFixed(1)}`;
+    });
+    svg += `<path d="${d}" fill="none" stroke="${css(c)}" stroke-width="2"/>`;
+  }
+  el.innerHTML = svg + "</svg>";
+  document.getElementById("legend").innerHTML = SERIES.map(([, n, c]) =>
+    `<span><span class="dot" style="background:var(${c})"></span> ${n}</span>`).join("");
+}
+
+function taccounts(e) {
+  document.getElementById("thead").textContent = `Last journal entry: ${e.template}`;
+  document.getElementById("tmeta").textContent =
+    `${e.entry_uid} at ${e.effective_at.replace("T", " ").slice(0, 19)} UTC. ${e.memo}`;
+  const by = new Map();
+  for (const p of e.postings) {
+    if (!by.has(p.account)) by.set(p.account, { dr: [], cr: [], ccy: p.currency });
+    (p.amount > 0 ? by.get(p.account).dr : by.get(p.account).cr).push(Math.abs(p.amount));
+  }
+  document.getElementById("taccounts").innerHTML = [...by].map(([acct, v]) => `
+    <div class="t"><div class="name">${esc(acct)}</div>
+      <div class="cols hdr"><div>Debit</div><div>Credit</div></div>
+      <div class="cols"><div>${v.dr.map((a) => money(a, v.ccy)).join("<br>")}</div>
+      <div>${v.cr.map((a) => money(a, v.ccy)).join("<br>")}</div></div></div>`).join("");
+}
+
+function statement(rows, ccy) {
+  document.getElementById("stmt").innerHTML =
+    `<tr><th>Time (UTC)</th><th>Template</th><th>Ref</th><th>Account</th><th class="num">Amount</th></tr>` +
+    rows.map((r) => `<tr><td>${r.effective_at.replace("T", " ").slice(0, 16)}</td><td>${esc(r.template)}</td>
+      <td>${esc(r.external_ref)}</td><td>${esc(r.role)}</td>
+      <td class="num ${r.amount < 0 ? "neg" : ""}">${money(r.amount, ccy)}</td></tr>`).join("");
+}
+
+async function load(org) {
+  const [b, h, s] = await Promise.all([
+    get(`/v1/organizers/${org}/balances`),
+    get(`/v1/organizers/${org}/history`),
+    get(`/v1/organizers/${org}/statement?limit=200`),
+  ]);
+  tiles(b);
+  chart(h, b.currency);
+  statement(s, b.currency);
+  if (s.length) taccounts(await get(`/v1/entries/${s[0].entry_id}`));
+}
+
+async function main() {
+  const orgs = await get("/v1/organizers");
+  const sel = document.getElementById("org");
+  sel.innerHTML = orgs.map((o) => `<option value="${esc(o.id)}">${esc(o.name)} (${o.currency})</option>`).join("");
+  sel.addEventListener("change", () => load(sel.value));
+  const inv = await get("/v1/invariants");
+  const el = document.getElementById("inv");
+  el.innerHTML = inv.ok ? `<span class="ok">All ${Object.keys(inv.checks).length} invariants hold.</span>`
+    : `<span class="bad">Invariant violations: ${Object.entries(inv.checks).filter(([, c]) => !c.ok).map(([k]) => k).join(", ")}</span>`;
+  if (orgs.length) load(orgs[0].id);
+  else document.getElementById("tiles").textContent = "No data. Run: uv run ledgercore demo --fresh";
+}
+main();
+</script>
+</body>
+</html>
